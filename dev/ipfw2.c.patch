@@ -1,0 +1,75 @@
+--- /usr/src/sbin/ipfw/ipfw2.c	Mon Jul 14 15:57:41 2003
++++ /usr/local/freebsdbrasil/cvs_root//usr/src/sbin/ipfw/ipfw2.c	Mon Jul 14 17:08:48 \
+2003 @@ -15,11 +15,11 @@
+  *
+  * This software is provided ``AS IS'' without any warranties of any kind.
+  *
+  * NEW command line interface for IP firewall facility
+  *
+- * $FreeBSD: /repoman/r/ncvs/src/sbin/ipfw/ipfw2.c,v 1.35 2003/07/14 18:57:41 luigi \
+Exp $ + * $FreeBSD: /usr/local/www/cvsroot/FreeBSD/src/sbin/ipfw/ipfw2.c,v 1.35 \
+                2003/07/14 18:57:41 luigi Exp $
+  */
+ 
+ #include <sys/param.h>
+ #include <sys/mbuf.h>
+ #include <sys/socket.h>
+@@ -1012,17 +1012,19 @@
+ 		default:
+ 			printf("** unrecognized action %d len %d",
+ 				cmd->opcode, cmd->len);
+ 		}
+ 	}
+-	if (logptr) {
+-		if (logptr->max_log > 0)
+-			printf(" log logamount %d", logptr->max_log);
+-		else
+-			printf(" log");
+-	}
+ 
++	/* Extended logging */
++        if (logptr) {
++                if (logptr->max_log > 0)
++                        printf(" log%s logamount %d", logptr->extended == 1 ? " \
+extended" : " ", logptr->max_log); +                else
++                        printf(" log%s",logptr->extended == 1 ? " extended" : "");
++        }
++ 
+ 	/*
+ 	 * then print the body.
+ 	 */
+ 	if (rule->_pad & 1) {	/* empty rules before options */
+ 		if (!do_compact)
+@@ -2880,11 +2882,11 @@
+ 		errx(EX_DATAERR, "invalid action %s\n", av[-1]);
+ 	}
+ 	action = next_cmd(action);
+ 
+ 	/*
+-	 * [log [logamount N]]	-- log, optional
++	 * [log [extended] [logamount N]]	-- log, optional
+ 	 *
+ 	 * If exists, it goes first in the cmdbuf, but then it is
+ 	 * skipped in the copy section to the end of the buffer.
+ 	 */
+ 	if (ac && !strncmp(*av, "log", strlen(*av))) {
+@@ -2892,10 +2894,19 @@
+ 		int l;
+ 
+ 		cmd->len = F_INSN_SIZE(ipfw_insn_log);
+ 		cmd->opcode = O_LOG;
+ 		av++; ac--;
++
++		/* Extended logging */
++                if (ac && !strncmp(*av, "extended", strlen(*av))) {
++                        c->extended = 1;
++                        ac--; av++;
++                }
++
++
++
+ 		if (ac && !strncmp(*av, "logamount", strlen(*av))) {
+ 			ac--; av++;
+ 			NEED1("logamount requires argument");
+ 			l = atoi(*av);
+ 			if (l < 0)

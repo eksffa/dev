@@ -1,0 +1,304 @@
+#!/usr/local/bin/maildrop
+# Patrick Tracanelli <eksffa@freebsdbrasil.com.br>
+# FreeBSD Brasil LTDA (http://www.freebsdbrasil.com.br)
+# 
+# You can safely remove all log entries when you are confident
+# about how it works.
+# grep -v log spamwhore_temp > spamwhore
+#
+# This version of spamwhore should be used only with vpopmail, installed
+# under /usr/local/vpopmail (as per FreeBSD Ports default)
+#
+# Logs and comments are in portuguese.
+#
+#VERBOSE=9 (debug only)
+#
+SHELL="/bin/sh"
+import EXT
+import HOST
+VPOP="| /usr/local/vpopmail/bin/vdelivermail '' bounce-no-mailbox"
+VHOME=`/usr/local/vpopmail/bin/vuserinfo -d $EXT@$HOST`
+TIMESTAMP=`date "+%d %b %H:%M:%S"`
+
+logfile "/var/log/maildrop-spamwhore.log"
+
+log "=== INICIO ($TIMESTAMP) === maildrop processando msg p/ $EXT@$HOST ==="
+
+if (!$VHOME)
+{
+	log "=> Usuario nao existe, enviando msg para stdout!"
+	log "=== FIM ==="
+		exception {
+			to "| "
+		}
+	EXITCODE=0
+	exit
+}
+
+
+`test -r $VHOME/spamwhore.conf`
+if( $RETURNCODE == 0 )
+{
+	log "=> configuracao personalizada carregada para $EXT@$HOST..."
+	exception {
+		include $VHOME/spamwhore.conf
+	}
+}
+else
+{
+	#
+	# Fill spamwhore.conf with default values. Change it according to your needs
+	#
+	# DESCARTA_PTS: when SPAM hits is higher than DESCARTA_PTS, spamwhore will
+	# discard the message without delivering it.
+	#
+	# SPAMC_DISABLED: spamwhore won´t run spamc (useful if you are running spamc
+	# from another place, say, a QMAILQUEUE program or vdelivermail, and still
+	# want to use spamwhore to do selective filtering of Spambox and discarding
+	# SPAM based on hits)
+	#
+	# TO_SPAMBOX: if this var exists, spamwhore will move SPAM with hits lower
+	# than DESCARTA_PTS to $VHOME/Maildir/.${TO_SPAMBOX}, which usually should be
+	# "Spam"
+	#
+	# Set the default to your needs:
+	#
+	`echo "DESCARTA_PTS=12" > $VHOME/spamwhore.conf`
+	#`echo "SPAMC_DISABLED=yes" >> $VHOME/spamwhore.conf`
+	#`echo "TO_SPAMBOX=Spam" >> $VHOME/spamwhore.conf`
+
+	exception {
+		include $VHOME/spamwhore.conf
+	}
+	log "=> configuracao personalizada para $EXT@$HOST criada e carregada (valores padrao)!"
+
+}
+
+if ($SPAMC_DISABLED ne "yes")
+{
+  exception {
+	# Usually SPAM is never higher than 250k.
+	# Spam nunca tem mais que 250k, normalmente.
+	if ( $SIZE < 256000 )
+	{
+		`test -x /usr/local/bin/spamc`
+		if ( $RETURNCODE == 0 )
+		{
+			log "=> processando via spamc (tamanho: $SIZE)"
+			exception {
+				xfilter '/usr/local/bin/spamc -t 4 -f -u "$EXT@$HOST"'
+			}
+		}
+		else
+		{
+			log "=> ATENCAO: /usr/local/bin/spamc nao encontrado!"
+		}
+	} 
+	else 
+	{
+		log "=> ATENCAO: Mensagem muito grande (tamanho: $SIZE) - NAO sera processada!"
+	}
+  }
+} 
+else
+{
+ log "=> SPAMC_DISABLED: nao executaremos spamc!"
+
+}
+# Nesse ponto a mensagem ja foi scaneada por spam e esta com o maildrop
+
+
+
+# Se houver um .mailfinter e' porque existem regras de maildrop customizadas
+# entao vamos inclui-las ja.
+`test -r $VHOME/.mailfilter`
+if( $RETURNCODE == 0 )
+{
+	log "=> incluindo $VHOME/.mailfilter"
+	exception {
+		include $VHOME/.mailfilter
+	}
+}
+
+# O maildrop vai respeitar todo o controle de quotas, padrao Maildir++
+`test -e $VHOME/Maildir/maildirsize`
+if( $RETURNCODE == 1)
+{
+	`test -x /usr/local/vpopmail/bin/vuserinfo`
+	if ( $RETURNCODE == 0)
+	{
+		log "=> criando $VHOME/Maildir/maildirsize p/ controle de quotas"
+		`/usr/local/vpopmail/bin/vuserinfo -Q $EXT@$HOST`
+
+	`test -s "$VHOME/Maildir/maildirsize"`
+   	if ( $RETURNCODE == 0 )
+   	{
+     		`/usr/sbin/chown vpopmail:vchkpw $VHOME/Maildir/maildirsize`
+			`/bin/chmod 640 $VHOME/Maildir/maildirsize`
+   	}
+	}
+	else
+	{
+		log "=> ATENCAO: vuserinfo nao encontrado!"
+	}
+}
+
+`test -e $VHOME/Maildir/maildirsize`
+if( $RETURNCODE == 0)
+{
+	MAILDIRQUOTA=`/usr/bin/head -n1 $VHOME/Maildir/maildirsize`
+}
+
+# Verifica se a mensagem foi marcada como Spam ( /^X-Spam-Status: *Yes/)
+# e atribui a pontuacao (hits) 'a variavel $MATCH2
+if (/^X-Spam-Status: Yes, hits=(.*)\s(.*)/:h)
+{
+	PONTOS=$MATCH1
+	log "=> SPAM! pontuacao: $PONTOS"
+
+	# I wish I could make it better, but I dont thin maildrop have native
+	# open/write functions, so I needed to run echo as external program.
+	# Ref http://www.flounder.net/~mrsam/maildrop/maildropfilter.html
+	`test -r $VHOME/spam_count.log`
+	if ( $RETURNCODE == 0 )
+	{
+		exception {
+			include $VHOME/spam_count.log
+		}
+		QTDE=$QTDE+1
+		`echo QTDE=$QTDE > $VHOME/spam_count.log`
+	}
+	else
+	{
+		QTDE=1
+		`echo QTDE=$QTDE > $VHOME/spam_count.log`
+	}
+	
+
+	if ($DESCARTA_PTS)
+	{
+	    # Se a mensagem tiver pontuacao > 12 e' Spam com certeza absoluta.
+	    # entao nao vamos entregar a lugar algum (maildrop interrompe processamento)
+	    # unica e exclusivamente se o usuario configurou isso (DESCARTA_PTS != null)
+	    if ( $PONTOS >= $DESCARTA_PTS )
+	    {
+		# Mesma rotina a-b-s-u-r-d-a, mas agora conta Spam dropados.
+		`test -r $VHOME/spamdescart_count.log`
+		if ( $RETURNCODE == 0 )
+		{
+			exception {
+				include $VHOME/spamdescart_count.log
+			}
+			QTDE=$QTDE+1
+			`echo QTDE=$QTDE > $VHOME/spamdescart_count.log`
+		}
+		else
+		{
+			QTDE=1
+			`echo QTDE=$QTDE > $VHOME/spamdescart_count.log`
+		}
+
+		log "=> SPAM: pontuacao muito alta ($PONTOS / $DESCARTA_PTS) - descartando!"
+		log "=> rocessamento p/ $EXT@$HOST terminado com successo (SPAM descartado)"
+		log "=== FIM ==="
+		EXITCODE=99
+		exit
+	    } 
+	    else 
+	    {
+		log "=> SPAM: mensagem marcada como Spam, mas nao sera descartada!"
+		log "=> SPAM: pontuacao e' $PONTOS"
+	    }
+	}
+
+	# Exclusivamente se o usuario configurou, e a mensagem nao foi descartada por ser Spam,
+	# vamos move-los para a caixa Spam (acessivel apenas via IMAP - isso inclui IMP);
+	# A existencia da variavel TO_SPAMBOX identifica a escolha do usuario (conf).
+	if ($TO_SPAMBOX)
+	{
+		# Se o usuario nao tem o diretorio Spam, temos que cria-lo e registra-lo (um saco)
+		`test -d $VHOME/Maildir/.$TO_SPAMBOX`
+		if( $RETURNCODE == 1 )
+		{
+			log "=> criando $VHOME/Maildir/.$TO_SPAMBOX"
+			`maildirmake -f $TO_SPAMBOX $VHOME/Maildir`
+			`/usr/local/vpopmail/bin/subscribeIMAP.sh $TO_SPAMBOX $VHOME`
+		}
+
+		log "=> SPAM! pontuacao: $PONTOS (entregando em $VHOME/Maildir/.$TO_SPAMBOX)"
+
+		# precisamos do deliverquota para forcar quota da entrega
+		`test -x /usr/local/bin/deliverquota`
+		if ( $RETURNCODE == 1 )
+		{
+			log "=> ATENCAO: deliverquota nao encontrado!"
+			log "=> processamento para $EXT@$HOST terminado com sucesso."
+			log "=> (entregando sem quota)"
+			log "=== FIM ==="
+			exception {
+				to "$VHOME/Maildir/.$TO_SPAMBOX"
+			}
+			EXITCODE=99
+			exit
+		}
+		else
+		{
+			exception {
+				xfilter "/usr/local/bin/deliverquota -w 90 $VHOME/Maildir/.$TO_SPAMBOX"
+			}
+
+			# se o deliverquota retornar codigo 0 a msg foi entregue com sucesso
+			if ( $RETURNCODE == 0 )
+			{
+				log "=> processamento para $EXT@$HOST terminado com sucesso!!"
+				log "=> mensagem entregue com quota!"
+				log "=== FIM ==="
+				EXITCODE=99
+				exit
+			}
+			else
+			{
+				# senao, temos que ver se foi codigo 77, se foi deu limite de quota
+				if( $RETURNCODE == 77)
+				{
+					log "=> processamento para $EXT@$HOST terminado!"
+					log "=> mensagem nao foi entregue, foi para _bounce_ (quota excedida)"
+					to "|/var/qmail/bin/bouncesaying '$EXT@$HOST is over quota (ultrapassou quota maxima)'"
+					log "=== FIM ==="
+					EXITCODE=99
+					exit
+				}
+				else
+				{
+					# mas se o erro n for 77, vai saber....
+					log "=> processamento para $EXT@$HOST terminado com falha :("
+					log "=> falha de entrega desconhecida, entregando em $VHOME/Maildir/.$TO_SPAMBOX"
+					to "$VHOME/Maildir/.$TO_SPAMBOX"
+				}
+			}
+		}
+	}
+}
+
+
+# Vamos verificar se a mensgem foi taggeada como limpa!
+if ( /^X-Spam-Status: No, hits=(.*)\s(.*)/:h)
+{
+	log "=> Entregando mensagem limpa! - nao e' Spam (pontuacao: $MATCH1)"
+}
+
+exception {
+	log "=> Mensagem enviada para $VHOME/Maildir"
+	to "$VPOP"
+}
+
+  if( $RETURNCODE == 77)
+  {
+	log "quota excedida para '$EXT@$HOST'"
+	to "|/var/qmail/bin/bouncesaying '$EXT@$HOST is over quota (ultrapassou quota maxima)'"
+	log "=== FIM ==="
+	EXITCODE=99
+	exit
+  }
+
+log "=> This log entry SHOULD NEVER HAPPEN. Something is wrong for '$EXT@$HOST' or maildrop itself."

@@ -1,0 +1,19 @@
+- August 2005: First version written, to Convex customer.
+
+- September 2006: Added statistics and the ability to discard spam,
+  for TurboSite customer.
+
+- May 2007: Added automatically default spamwhore.conf creation,
+  as requested by Carlos Talhati (from iqsc.usp.br);
+
+- May 2007: Adjusted $MATCH processing on subexpressions for Maildrop 2.X;
+
+- May 2007: Added SPAMC_DISABLED for a number of customers who want to have
+  the choice between scanning from simscan (via QMAILQUEUE) or spamwhore, and
+  never from both at the same time.
+
+- May 2007: Now $TO_SPAMBOX is not boolean anymore. It should have the name of
+  the spam folder. Defaults to "Spam".
+
+Patrick Tracanelli, <eksffa@freebsdbrasil.com.br>
+

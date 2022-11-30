@@ -1,0 +1,80 @@
+1. What is spamwhore?
+
+It is a maildrop filter program, to be used in Delivery Mode. It is intended
+to be used from dot-qmail(5) files, both user-defined .qmail on vpopmail and
+qmail-ldap, as well as .qmail-default on vpopmail, for entire domain filtering.
+
+spamwhore is simple and customizable filtering script
+
+Currently, only vpopmail is completly supported. Qmail-LDAP work is on the way,
+but I did not finish it because our Qmail-LDAP customers preffer to use some
+other approaches.
+
+spamwhore features include:
+
+	- per-user .qmail filtering
+	- domain-wide .qmail-default filtering
+	- runs spamc (spamassassin client) to classify spam
+	- allows spamc running to be turned off on a per-user basis
+	- can be configured to deliver SPAM to .Spam box (per-user configuration)
+	- can be configured to automatically discard messages if SPAM HITS is
+	  above a certain value (per-user configuration)
+	- Keeps SPAM statistics (per-user)
+	- Keeps discarded SPAM individual statistics (per-user)
+
+1. Install Instructions for SpamWhore
+
+This is a maildrop filter program. It means you need maildrop. Version 2.x is
+required. Under FreeBSD install it from the Ports Collection:
+
+	/usr/ports/mail/maildrop
+
+Type
+	# make
+
+It will install spamwhore and the needed subscribeIMAP.sh script on
+${PREFIX}/vpopmail/bin/, and create /var/log/maildrop-spamwhore.log with
+appropriated permissions.
+
+2. Deinstalling
+
+Just type:
+	# make deinstall
+
+
+3. Configuring
+
+$VHOME is the user´s HOME, obtained from vpopmail with
+
+	vuserinfo -d user@domain
+
+spamwhore expects to find $VHOME/spamwhore.conf everytime it runs. If it
+does not find, it will create this file with default settings. So, the
+very first thing you will want to do is edit spamwhore after it is
+installed, and look for the commented following block:
+
+	# DEFAULT SETTINGS for spamwhore.conf
+
+Read it out, and uncomment/adjust the desired values.
+
+$VHOME/spamwhore.conf is expected to have the following variables:
+
+- DESCARTA_PTS: when SPAM hits is higher than DESCARTA_PTS, spamwhore will
+  discard the message without delivering it.
+
+- SPAMC_DISABLED: spamwhore won´t run spamc (useful if you are running spamc
+  from another place, say, a QMAILQUEUE program or vdelivermail, and still
+  want to use spamwhore to do selective filtering of Spambox and discarding
+  SPAM based on hits)
+
+- TO_SPAMBOX: if this var exists, spamwhore will move SPAM with hits lower
+  than DESCARTA_PTS to $VHOME/Maildir/.$TO_SPAMBOX, which usually should be
+  "Spam".
+
+Thats all you need to know. spamwhore is a simple filtering and customizeble
+filtering script. Feel invited to read and change it.
+
+3. Good Luck!
+
+Good Luck with spamwhore
+

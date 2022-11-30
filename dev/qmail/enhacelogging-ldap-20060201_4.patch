@@ -1,0 +1,38 @@
+--- ../qmail-1.03_orig/qmail-smtpd.c	2009-11-03 14:54:33.000000000 -0200
++++ qmail-1.03/qmail-smtpd.c	2009-11-03 15:18:37.000000000 -0200
+@@ -1192,6 +1192,15 @@
+     while (sleep(tarpitdelay));
+   }
+   out("250 ok\r\n");
++  /* FreeBSD Brasil: enhace logging */
++  if (relayclient)
++     logstring(2,"Accept::SNDR::Relay_Client: S:");
++  else
++     logstring(2,"Accept::RCPT::Rcpthosts_Rcptto: S:");
++  logstring(2,remoteip);
++  logstring(2," F:"); logstring(2,mailfrom.s);
++  logstring(2," T:"); logstring(2,addr.s);
++  logflush(2);
+ }
+ 
+ #ifdef DATA_COMPRESS
+@@ -1596,12 +1605,19 @@
+     remoteinfo = line.s;
+     out(status);
+     logline2(2,"authentication success, user ", remoteinfo);
++    /* FreeBSD Brasil: enhace logging */
++    logstring(2,"Info::ORIG::Valid_Auth: S:"); logstring(2,remoteip);
++    logstring(2," F:"); logstring(2,remoteinfo);
++    logflush(2);
+     break;
+   case '4':
+   case '5':
+     sleep(1);
+     out(status); flush();
+     logline2(3, "authentication failed: ", status + 4);
++    /* FreeBSD Brasil: enhace logging */
++    logstring(2,"Reject::ORIG::Failed_Auth: S:"); logstring(2,remoteip);
++    logflush(2);
+     sleep(4);
+     if (errdisconnect) err_quit();
+     break;

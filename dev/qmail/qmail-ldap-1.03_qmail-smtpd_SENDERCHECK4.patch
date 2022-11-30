@@ -1,0 +1,50 @@
+Patrick Tracanelli <eksffa at freebsdbrasil dot com dot br>
+http://www6.freebsdbrasil.com.br/~eksffa/l/dev/
+
+This is a small change to SENDERCHECK feature in Qmail-LDAP which adds a new
+option called LOOSERELAY. It will allow the very same checks that "LOOSE"
+options do but exclusvely for RELAY clients.
+
+Therefore it is a split-horizon approach to the problem where our relayclients
+spoofs outgoing envelope sender causing abuses like phishing.
+
+--- qmail-smtpd.c       2009-02-27 12:01:07.000000000 -0300
++++ qmail-ldap-1.03_qmail-smtpd_SENDERCHECK4.patch      2009-02-27 12:02:07.000000000 -0300
+@@ -495,6 +495,7 @@
+     sendercheck = 1;
+     if (!case_diffs("LOOSE",env_get("SENDERCHECK"))) sendercheck = 2;
+     if (!case_diffs("STRICT",env_get("SENDERCHECK"))) sendercheck = 3;
++    if (!case_diffs("LOOSERELAY",env_get("SENDERCHECK"))) sendercheck = 4;
+   }
+   if (env_get("RCPTCHECK")) rcptcheck = 1;
+   if (env_get("LDAPSOFTOK")) ldapsoftok = 1;
+@@ -558,6 +559,7 @@
+   if (sendercheck == 1) logstring(3," ");
+   if (sendercheck == 2) logstring(3,"-loose ");
+   if (sendercheck == 3) logstring(3,"-strict ");
++  if (sendercheck == 4) logstring(3,"-looserelay ");
+   if (rcptcheck) logstring(3,"rcptcheck ");
+   if (ldapsoftok) logstring(3,"ldapsoftok ");
+   if (flagauth) logstring(3, "smtp-auth");
+@@ -1293,12 +1295,19 @@
+         /* normal mode: let through, it's just an external mail coming in */
+         /* loose mode (2): see if sender is in rcpthosts, if no reject here */
+         /* strict mode (3): validated sender required so reject in any case */
++        /* strict relay mode (4): like loose mode, but only for relay clients */
+         if ((sendercheck == 2 && !addrallowed()) || sendercheck == 3) {
+           err_554msg("refused mailfrom because valid "
+             "local sender address required");
+           if (errdisconnect) err_quit();
+           return;
+         }
++       if ((sendercheck == 4 && !addrallowed() && (relayclient))) {
++         err_554msg("refused mailfrom in RELAY mode because valid "
++               "local sender address required");
++          if (errdisconnect) err_quit();
++          return;
++       }
+       }
+     }
+   }
+
+

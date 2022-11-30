@@ -1,0 +1,162 @@
+
+1. Install Instructions for External Forked SPF Checker System for Qmail
+
+Please, before you continue, note that this software depends on SMTPEXTFORK
+patch applied to your qmail-smtpd. Those patches are maintained both for
+qmail with Erwin Hoffman's SpamControl system and Andre Opperman's qmail-LDAP.
+
+2. Understanding How xf-spf Works
+
+When an SMTP session starts, xf-spf is expected to be forked from
+qmail-smtpd - this is why you need SMTPEXTFORK. When forked, this processes
+gets all enviroment variables which were available for the parent process
+(qmail-smtpd).
+
+When forked, xf-spf will use TCPREMOTEIP, REMOTEMF, REMOTERCPT and REMOTEHELO
+enviroment vars. The first one is set by tcpserver(1) and the last three are
+set my SMTPEXTFORK patch; xf-spf will them use libspf2 to perform the SPF
+check and validate the sender according to RFC-4408.
+
+The enviroment var, SPFBEHAVIOR needs to be set. If it is not set, xf-spf
+will not run, and will log a message stating SPFBEHAVIOR enviroment var
+is not available. SPFBEHAVIOR will define the proper behavior of xf-spf.
+
+Similar to the excellent Saout's SPF implementation for qmail, SPFBEHAVIOR
+may be set with values from 0 to 6. If SPFBEHAVIOR is not set, xf-spf will
+not run at all, and will return code XFPASS imediately, (this code is defined
+in xf-spf.h) which will make qmail-smtpd with SMTPEXTFORK's patch accept
+the message.
+
+If SPFBEHAVIOR is not set, you are supposed not to run xf-spf at all.
+
+If you want to disable xf-spf for some reason, or disable it's checking for
+one particular IP address, using tcprules(1), set SPFBEHAVIOR to 0.
+
+The following values and behavior are supported by xf-spf:
+
+	0: xf-spf will never do SPF lookups, will not generate log, and will
+	   return XFPASS code imediately;
+
+	1: xf-spf will do SPF lookups but will only syslog the results;
+
+	2: return XFPASS code upon lookup failure's caused by libspf DNS
+	   lookup problems;
+	
+	3: Rejects all mail when SPF lookup resolves to fail - when sender is
+	   not allowed per SPF policy - this is the minimum recommended choice;
+
+	4: Rejects all mail when SPF lookup resolves to softfail - when sender
+	   is not designated as permitted but domain's SPF policy is '~all';
+
+	5: Rejects all mail when SPF lookup resolves to neutral - when sender
+	   is not designated as permitted but domain's SPF policy is '?all';
+
+	6: Rejects all mail when SPF lookup does not resolve to pass - when
+	   sender is not designated as permitted or domain does not have SPF
+	   record, or upon any temporary or permanent failure caused by libspf2,
+	   by xf-spf or by local DNS problems. This is the most aggressive
+	   policy and is not recommended untill SPF is not widely spread, because
+	   xf-spf will always reject messages from domains which do not have SPF
+	   record - and they are many.
+
+Those definitions are recursive. Which means that '2' includes 1 and 2; 3 includes
+1, 2 and 3, and 6 means all behavior from 1-6.
+
+According to SPFBEHAVIOR's value, xf-spf will return XFPASS or XFPERMF code.
+The second one will make qmail-smtpd return a 550 message. It is suggested 
+that you customize this message - SMTPEXTFORK allows you to do this. If libspf2
+fails for some reason, it will be logged via syslog and XFSPFERR code will be
+returned.
+
+This SPF checker implementation does not rewrite the message adding the known
+Received-SPF: header. RFC-4008 says it is recommended but not "a must". So we
+only do logging of this entry.
+
+3. Logging
+
+xf-spf logs via syslog; it uses LOG_INFO on LOG_MAIL, so mail.info should point
+somewhere in your system to get xf-spf's logging; FreeBSD system's and most 
+Unix or Unix-like systems log mail.info to /var/log/maillog. What xf-spf logs:
+
+	- Complete Received-SPF entries for SPF lookups on domains that do have
+	  the appropriated SPF DNS records;
+
+	- Optionally, Received-SPF entry for domains which do not have SPF DNS
+	  record. This is NOT the default xf-spf behavior. If you want this
+	  sort of logging to happen, edit xf-spf.h and define LOGNSPFDOM to 1
+	  before building this program;
+
+	- Invalid HELO/EHLO, invalid FROM envelope sender, invalid IP address,
+	  invalid domain or user (invalid characters) and every other error
+	  libspf2 may point us;
+
+	- If SMTPBEAVIOR enviroment var is not defined.
+
+
+4. Installing xf-spf
+
+Installing xf-spf is easy. You can do it from FreeBSD Ports Collection, or
+you can just untar, make and make install it:
+
+	tar vxjf xf-spf-xx.tar.bz2
+	cd xf-spf-xx
+	make
+	make install
+	make clean
+
+This program will be installed as /var/qmail/bin/xf-spf
+
+But before installing, remember it needs libspf2. If you are on FreeBSD, 
+install mail/libspf2 before building xf-spf:
+
+	cd /usr/ports/mail/libspf2
+	make install clean
+
+Or install libspf2 your way.
+
+5. Configure xf-spf usage on qmail-smtpd's SMTPEXTFORK patch:
+
+Add /var/qmail/bin/xf-spf to the appropriated enviroment variable:
+
+	echo /var/qmail/bin/xf-spf > /var/service/smtpd/env/SMTPEXTFORK
+
+Or use it with tcprules:
+
+	:allow,SMTPEXTFORK="/var/qmail/bin/xf-spf"
+
+Remember that more than one program can be used with SMTPEXTFORK patch. If
+you already use any other, add xf-spf separated by comma:
+
+	:allow,SMTPEXTFORK="/var/qmail/bin/xf-spf,/some/other/prog"
+
+Or
+
+	echo "/some/other/prog,/var/qmail/bin/xf-spf" \
+		> /var/service/smtpd/env/SMTPEXTFORK
+
+Please, note that, according to RFC-4408 SMTP code 550 should be used to reject
+the e-mail message; xf-spf's default behavior tells qmail-smtpd with 
+SMTPEXTFORK feature to use this code, so you are heavily encouraged to customize
+the message 550 code will print with SMTPEXTFORK:
+
+	echo "SPF check does not designate your IP as permitted sender, \
+	see http://www.openspf.org/howworks.html" > \
+					/var/service/smtpd/env/550SMTPEXTFORK
+
+Finally, set SPFBEHAVIOR enviroment; for testing purposes set it as 1, so you
+can follow /var/log/maillog's entries. For production, the minimum interesting
+value for SPFBEHAVIOR is 3. Set it accordingly:
+
+	echo 3 > /var/service/smtpd/env/SPFBEHAVIOR
+
+Remember you can always set SPFBEHAVIOR and 550SMTPEXTFORK with tcprules(1).
+
+Restart qmail-smtpd service with svc -k /var/service/smtpd or your
+own way.
+
+6. Good Luck!
+
+Good Luck with xf-spf, a customized SPF checker for qmail to be used with
+SMTPEXTFORM patch, used and approved by a number of FreeBSD Brasil LTDA's
+customers.
+

@@ -1,0 +1,39 @@
+Patrick Tracanelli <eksffa at freebsdbrasil dot com dot br>
+http://www6.freebsdbrasil.com.br/~eksffa/l/dev/
+
+This patch will make qmail-smtpd already patched with spamcontrol to do the
+MAXRECIPIENTS and tarpiting tests for relay clients (split horizon), only if
+RELAYMRTPCHECK env is enabled. So, it will allow this kind of selective
+setup, using tcprules:
+
+201.58.77.190:allow,RELAYCLIENT="",MAXRECIPIENTS="5",TARPITCOUNT="3",\
+	TARPITDELAY="10",RELAYMRTPCHECK=""
+
+Or globally, if RELAYMRTPCHECK exists on /var/service/smtpd/env/ for example.
+
+Why? This way we can impose this limit to our own relayclients.
+
+--- qmail-smtpd.c	Tue Jun  5 11:56:01 2007
++++ /tmp/qmail-smtpd.c.RELAYMRTPCHECK	Tue Jun  5 11:55:37 2007
+@@ -1052,6 +1052,21 @@
+     return;
+   }
+ 
++  if (env_get("RELAYMRTPCHECK")) {
++    if (tarpitcount && flagerrcpts >= tarpitcount) {    /* Tarpitting et al. */
++      err_rcpts("Reject::RCPT::Toomany_Rcptto:",protocol.s,remoteip,remotehost,helohost.s,mailfrom.s,addr.s);
++      return;   
++    }
++    if (maxrcptcount && rcptcount > maxrcptcount) {
++      err_rcpts("Reject::RCPT::Toomany_Rcptto:",protocol.s,remoteip,remotehost,helohost.s,mailfrom.s,addr.s);
++      return;
++    }
++     if (tarpitcount && rcptcount >= tarpitcount) {
++      unsigned int rest = tarpitdelay;
++      while (rest = sleep(rest));
++    }
++  }
++
+ /* this file is too long --------------------------------- Checks done; mailfrom/recipient accepted */
+ 
+   if (!stralloc_cats(&rcptto,"T")) die_nomem();

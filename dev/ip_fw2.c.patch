@@ -1,0 +1,222 @@
+--- /usr/src/sys/netinet/ip_fw2.c	Sat Jul 12 02:54:17 2003
++++ /usr/local/freebsdbrasil/cvs_root/usr/src/sys/netinet/ip_fw2.c	Mon Jul 14 \
+16:55:45 2003 @@ -20,15 +20,21 @@
+  * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+  * SUCH DAMAGE.
+  *
+- * $FreeBSD: /repoman/r/ncvs/src/sys/netinet/ip_fw2.c,v 1.36 2003/07/12 05:54:17 \
+luigi Exp $ + * $FreeBSD: /usr/local/www/cvsroot/FreeBSD/src/sys/netinet/ip_fw2.c,v \
+                1.36 2003/07/12 05:54:17 luigi Exp $
+  */
+ 
+-#define        DEB(x)
+-#define        DDB(x) x
++#define	DEB(x)
++#define	DDB(x) x
++
++/* Extended logging */
++#define	GFLAGS_LEN	35
++#define	GIOPTS_LEN	28
++#define	GITOS_LEN	28
++#define	GTOPTS_LEN	55
+ 
+ /*
+  * Implement IP packet firewall (new version)
+  */
+ 
+@@ -111,10 +117,61 @@
+ MALLOC_DEFINE(M_IPFW, "IpFw/IpAcct", "IpFw/IpAcct chain's");
+ 
+ static int fw_debug = 1;
+ static int autoinc_step = 100; /* bounded to 1..1000 in add_rule() */
+ 
++/* Extended logging */
++
++struct _s_x {
++        char *s;
++        int x;
++};
++
++static struct _s_x f_tcpflags[] = {
++        { "syn", TH_SYN },
++        { "fin", TH_FIN },  
++        { "ack", TH_ACK },
++        { "psh", TH_PUSH },
++        { "rst", TH_RST },
++        { "urg", TH_URG },
++        { "tcp flag", 0 },
++        { NULL, 0 }
++};
++
++ static struct _s_x f_ipopts[] = {
++        { "ssrr",       IP_FW_IPOPT_SSRR},
++        { "lsrr",       IP_FW_IPOPT_LSRR},
++        { "rr",         IP_FW_IPOPT_RR},
++        { "ts",         IP_FW_IPOPT_TS},
++        { "ip option",  0 },
++        { NULL, 0 }
++}; 
++
++static struct _s_x f_iptos[] = {
++        { "lowdelay",   IPTOS_LOWDELAY},
++        { "throughput", IPTOS_THROUGHPUT},
++        { "reliability", IPTOS_RELIABILITY},
++        { "mincost",    IPTOS_MINCOST},
++        { "congestion", IPTOS_CE},
++        { "ecntransport", IPTOS_ECT},
++        { "ip tos option", 0},
++        { NULL, 0 }
++};
++
++static struct _s_x f_tcpopts[] = {
++        { "mss",        IP_FW_TCPOPT_MSS },
++        { "maxseg",     IP_FW_TCPOPT_MSS },
++        { "window",     IP_FW_TCPOPT_WINDOW },
++        { "sack",       IP_FW_TCPOPT_SACK },
++        { "ts",         IP_FW_TCPOPT_TS },
++        { "timestamp",  IP_FW_TCPOPT_TS },
++        { "cc",         IP_FW_TCPOPT_CC },
++        { "tcp option", 0 },
++        { NULL, 0 }
++};
++
++
+ #ifdef SYSCTL_NODE
+ SYSCTL_NODE(_net_inet_ip, OID_AUTO, fw, CTLFLAG_RW, 0, "Firewall");
+ SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, enable,
+     CTLFLAG_RW | CTLFLAG_SECURE3,
+     &fw_enable, 0, "Enable ipfw");
+@@ -455,17 +512,18 @@
+ 
+ /*
+  * We enter here when we have a rule with O_LOG.
+  * XXX this function alone takes about 2Kbytes of code!
+  */
++
+ static void
+ ipfw_log(struct ip_fw *f, u_int hlen, struct ether_header *eh,
+ 	struct mbuf *m, struct ifnet *oif)
+ {
+ 	char *action;
+-	int limit_reached = 0;
+-	char action2[40], proto[48], fragment[28];
++	int limit_reached = 0, extended = 0;
++	char action2[40], proto[48], fragment[28], ipvals[200];
+ 
+ 	fragment[0] = '\0';
+ 	proto[0] = '\0';
+ 
+ 	if (f == NULL) {	/* bogus pkt */
+@@ -486,10 +544,13 @@
+ 			limit_reached = l->max_log;
+ 		cmd += F_LEN(cmd);	/* point to first action */
+ 		if (cmd->opcode == O_PROB)
+ 			cmd += F_LEN(cmd);
+ 
++		/* Extended logging rule */
++		extended = l->extended;
++ 
+ 		action = action2;
+ 		switch (cmd->opcode) {
+ 		case O_DENY:
+ 			action = "Deny";
+ 			break;
+@@ -571,11 +632,11 @@
+ 		switch (ip->ip_p) {
+ 		case IPPROTO_TCP:
+ 			len = snprintf(SNPARGS(proto, 0), "TCP %s",
+ 			    inet_ntoa(ip->ip_src));
+ 			if (offset == 0)
+-				snprintf(SNPARGS(proto, len), ":%d %s:%d",
++				len += snprintf(SNPARGS(proto, len), ":%d %s:%d",
+ 				    ntohs(tcp->th_sport),
+ 				    inet_ntoa(ip->ip_dst),
+ 				    ntohs(tcp->th_dport));
+ 			else
+ 				snprintf(SNPARGS(proto, len), " %s",
+@@ -619,24 +680,78 @@
+ 		if (ip_off & (IP_MF | IP_OFFMASK))
+ 			snprintf(SNPARGS(fragment, 0), " (frag %d:%d@%d%s)",
+ 			     ntohs(ip->ip_id), ip_len - (ip->ip_hl << 2),
+ 			     offset << 3,
+ 			     (ip_off & IP_MF) ? "+" : "");
++
++		if (extended == 1) {
++			int	i;
++			char g_flags[GFLAGS_LEN]="", g_ipopts[GIOPTS_LEN]="", g_iptos[GITOS_LEN]="", \
+g_tcpopts[GTOPTS_LEN]="", comma[1]=""; +
++			u_char set = tcp->th_flags & 0xff;
++			u_char setopt = ip->ip_hl & 0xff;
++			u_char settos = ip->ip_tos & 0xff;
++			u_char settcpopt = tcp->th_off & 0xff;
++	
++			if (ip->ip_p == 6) { 
++				for (i=0; f_tcpflags[i].x != 0; i++) 
++				{
++					if (set & f_tcpflags[i].x) 
++					{
++						snprintf(g_flags, GFLAGS_LEN-1, "%s%s%s", g_flags, comma, f_tcpflags[i].s);
++						comma[0] = ',';
++					} 
++				}
++				comma[0] = NULL; /* reset comma */
++				for (i=0; f_ipopts[i].x != 0; i++)
++				{
++					if (setopt & f_ipopts[i].x)
++					{
++						snprintf(g_ipopts, GIOPTS_LEN-1, "%s%s%s", g_ipopts, comma, f_ipopts[i].s);
++						comma[0] = ',';
++					}
++				}
++				comma[0] = NULL; /* once again */
++				for (i=0; f_iptos[i].x != 0; i++)
++				{
++					if (settos & f_iptos[i].x)
++					{
++						snprintf(g_iptos, GITOS_LEN-1, "%s%s%s", g_iptos, comma, f_iptos[i].s);
++						comma[0] = ',';
++					}
++				}
++				comma[0] = NULL;
++				for (i=0; f_tcpopts[i].x != 0; i++)
++				{
++					if (settcpopt & f_tcpopts[i].x)
++					{
++						snprintf(g_tcpopts, GTOPTS_LEN-1, "%s%s%s", g_tcpopts, comma, f_tcpopts[i].s);
++						comma[0] = ',';
++					}
++				}
++				snprintf(SNPARGS(ipvals, 0), " [iptos %s (0x%02x)] [ipoptions %s (0x%02x) ttl \
+%u, id %u, len %u] [tcpflags %s (0x%02x) tcpoptions %s (0x%02x)] ack number %u seq \
+number %u", +					g_iptos, ip->ip_tos, g_ipopts, ip->ip_hl, ip->ip_ttl, \
+ntohs(ip->ip_id), ip_len, +						g_flags, tcp->th_flags, g_tcpopts, tcp->th_off, \
+tcp->th_ack, tcp->th_seq); +			} else {
++				snprintf(SNPARGS(ipvals, 0), " (ttl %u, id %u, len %u)", ip->ip_ttl, \
+ntohs(ip->ip_id), ip_len); +			}
++		} else
++			ipvals[0] = '\0';
+ 	}
+ 	if (oif || m->m_pkthdr.rcvif)
+ 		log(LOG_SECURITY | LOG_INFO,
+-		    "ipfw: %d %s %s %s via %s%d%s\n",
++		    "ipfw: %d %s %s %s via %s%d%s%s\n",
+ 		    f ? f->rulenum : -1,
+ 		    action, proto, oif ? "out" : "in",
+ 		    oif ? oif->if_name : m->m_pkthdr.rcvif->if_name,
+ 		    oif ? oif->if_unit : m->m_pkthdr.rcvif->if_unit,
+-		    fragment);
++		    fragment, ipvals);
+ 	else
+ 		log(LOG_SECURITY | LOG_INFO,
+-		    "ipfw: %d %s %s [no if info]%s\n",
++		    "ipfw: %d %s %s [no if info]%s%s\n",
+ 		    f ? f->rulenum : -1,
+-		    action, proto, fragment);
++		    action, proto, fragment, ipvals);
+ 	if (limit_reached)
+ 		log(LOG_SECURITY | LOG_NOTICE,
+ 		    "ipfw: limit %d reached on entry %d\n",
+ 		    limit_reached, f ? f->rulenum : -1);
+ }

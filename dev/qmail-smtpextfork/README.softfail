@@ -1,0 +1,233 @@
+
+1. Install Instructions for Soft Fail Greylisting System for Qmail
+
+Please, before you continue, note that this software depends on SMTPEXTFORK
+patch applied to your qmail-smtpd. Those patches are maintained both for
+qmail with Erwin Hoffman's SpamControl system and Andre Opperman's qmail-LDAP.
+
+2. Understanding How Soft Fail Works
+
+Soft Fail works with a database. In this version the only database available
+is MySQL. It is planned to add Berkeley DB support in the future.
+
+When an SMTP session starts, softfail is expected to be forked from
+qmail-smtpd - this is why you need SMTPEXTFORK. When forked, this processes
+gets all enviroment variables which were available for the parent process
+(qmail-smtpd), simply because this is how Unix is. Soft Fail will check
+in the database if that triplet (TCPREMOTEIP, REMOTEMF and REMOTERCPT) is
+already known. If not, will return ENVELOPE_SOFTFAIL_CODE exit code. By
+default ENVELOPE_SOFTFAIL_CODE is 101, and qmail-smtpd's SMTPEXTFORK patch
+will issue the apropriate and customizable SMTP temporary failure code.
+
+If the incoming message is from a mailing list, REMOTEMF will be silently
+ignored from Soft Fail's check to avoid know problems with Yahoo Groups and
+a few other similar systems. Soft Fail will exit ENVELOPE_SOFTFAIL_CODE 
+every time the message tries to be reinjected, for UNBLOCK_AFTER_SEEN
+seconds.
+
+If a message is to be delivered again (thus, the remote SMTP system know how
+to behave upon SMTP temporary failure, this is good) after UNBLOCK_AFTER_SEEN
+seconds, Soft Fail exits 0 which tells SMTPEXTFORK to continue processing
+the message as usual. Soft Fail for this situation has finished it's duties.
+But not before adding the unique message ID to the database. This message id
+will be verified if the same TCPREMOTEIP address tries to deliver more than
+one message.
+
+In fact Soft Fail has a white listing feature, so, if a certain IP address
+or domain is in the white list, Soft Fail will exit 0 without extra checks.
+Soft Fail also has a black listing feature. Those checks are made at the
+same time, and it allows Soft Fail to make a decision of accepting the
+message or not without further checks.
+
+If the remote host is trying to delivery the message again, before
+UNBLOCK_AFTER_SEEN seconds has passed, Soft Fail will check if the last
+delivery trial was before RFCSEENTIME. According to some RFC's an SMTP
+MTA should not try to delivery the same message again before 90 seconds.
+This behavior may be artificially broken for example, if the remote MTA
+administrator issue a queue reprocessing command (like, sending ALRM signal
+to qmail-send). So, we have a tolerance on the number of times a remote
+MTA is allowed to try redelivering the same message again before RFCSEENTIME
+seconds. This tolerance is SEENCONSECMAXTIME consecutive times.
+
+If the message reinjection happens before RFCSEENTIME for SEENCONSECMAXTIME
+consecutive times, Soft Fail acts as a Greylisting decision maker, moving the
+remote MTA's TCPREMOTEIP from the grey list to the black list. It automatically
+adds TCPREMOTEIP to the database as Blacklisted.
+
+Run-time configuration defined by enviroment variables may overwrite the 
+mentioned defined values, according to the table:
+
+define			enviroment
+------------------	---------------
+RFCSEENTIME		SFSEENTIME
+SEENCONSECMAXTIME	SFMAXSEENTIMES
+UNBLOCK_AFTER_SEEN	SFGLTIME
+
+Everytime a message is tried to be delivered, Soft Fail first checks for the
+existance of the TCPREMOTEIP or REMOTEMF in the white or black lists. If they
+do exist in the black list, Soft Fail exits ENVELOPE_REJECT_CODE, which,
+by default is 100. qmail-smtpd's SMTPEXTFORK patch will issue the appropriated
+permanent failure code in the SMTP session, along with a customizable message.
+Soft Fail also increments in one the counter of number of times that TCPREMOTEIP
+has been rejected, for statistics purposes.
+
+If a entry exists for over EXPIRE_SEENMSG minutes in the database, but the
+message was never accepted, Soft Fail will remove it from db.
+
+The accepted message will only be in the white list for the combination of
+triplet+msg-id for EXPIRE_ACCEPTED days. After that, the record will expire
+and get removed from db.
+
+There is and additional and optional program that comes with Soft Fail. It
+is the rotate-softfail-db program, responsible for database maintainance.
+This program removes every blacklisted entry from the database if the entry
+exists for more than MAXDAYSAUTOBLACKINDB days and only if the entry was
+added automatically.
+
+Also, rotate-softfail-db allows you to delete only auto blacklisted or all
+entries (blacklisted, greylisted and whitelisted), by using the program
+with the -b or -f options, respectively.
+
+Whitelisted or blacklisted entries added manually will stay permanently in the
+database. Soft Fail or rotate-softfail-db will never delete manual entries
+from db. You should manage manual entries by yourself.
+
+3. Installing Soft Fail
+
+Edit softfail.h and set those constants to the value you wish, according to
+desired bevior of Soft Fail, described in (2). Default values are appropriated
+for the average use.
+
+At least, conf.h and set the database information. Create the necessary
+user in your database or just edit database.sql with the same db information
+provided on conf.h.
+
+Run
+	$ mysql -uroot -p < softfail.sql
+
+MySQL will prompt for the root password and run all SQL queries from
+softfail.sql.
+
+Edit rotate-softfail.sh and add the appropriated e-mail address to the
+MAILREPORT variable in this shell script. It will generate a report of
+Soft Fail's activies based on its log file.
+
+Build and compile the programs:
+
+	$ make
+	# make install
+
+Optionally, add the recomended crontab entries:
+
+	# make crontab-entry
+
+It will add the following entries to /etc/crontab:
+
+ # Soft Fail daily maintainance
+ @daily		root	/usr/local/bin/rotate-softfail-db
+ @daily		root	/usr/local/bin/rotate-softfail.sh
+
+You are done with Soft Fail.
+
+4. Configure Soft Fail usage on qmail-smtpd's SMTPEXTFORK patch:
+
+Add /var/qmail/bin/softfail to the appropriated enviroment variable:
+
+	# echo /var/qmail/bin/softfail > /var/service/smtpd/env/SMTPEXTFORK
+
+Or use it with tcprules:
+
+	:allow,SMTPEXTFORK="/var/qmail/bin/softfail"
+
+Remember that more than one program can be used with SMTPEXTFORK patch. If
+you already use any other, add softfail separated by comma:
+
+	:allow,SMTPEXTFORK="/var/qmail/bin/softfail,/some/other/prog"
+
+Or
+
+	# echo "/some/other/prog,/var/qmail/bin/softfail" \
+		> /var/service/smtpd/env/SMTPEXTFORK
+
+Restart qmail-smtpd service with svc -k /var/service/smtpd or your
+own way.
+
+If you want to customize SMTP failure messages, according to SMTPEXTFORK's
+patch specifications you can set the 454SMTPEXTFORK and 554SMTPEXTFORK
+enviroment variables. Example:
+
+	# echo "temporary failure, softfail policy (greylisting)" \
+		> /service/smtpd/env/454SMTPEXTFORK
+
+	# echo "permanent failure, softfail policy (greylisting)" \
+		> /service/smtpd/env/554SMTPEXTFORK
+
+Optionally, customize RFC Blacklisting metrics:
+
+	# echo 60 > /service/smtpd/env/SFSEENTIME
+	# echo 12 > /service/smtpd/env/SFMAXSEENTIMES
+
+Which will make SoftFail add any IP to blacklist if trying to delivery
+SFMAXSEENTIMES consecutive times the same messages in less than SFSEENTIME
+seconds.
+
+If you want to modify the Greylisting time, for example, to 1 minute (60s):
+
+        # echo 60 > /service/smtpd/env/SFGLTIME
+
+Which will cause temporary failure for only SFGLTIME seconds.
+
+If you want to activate META-SPF check you have the SFSPFBEHAVIOR environment
+variable (SoftFail SPF Behavior). If this env var is set, Soft Fail will never
+run for domains which Sender Policy Framework (SPF) resolves to PASS. Any value
+will do, but the suggested value right now is "5". 
+
+	# echo 5 > /service/smtpd/env/SFSPFBEHAVIOR
+
+5. Following Soft Fail's behavior
+
+Soft Fail has its own log file, /var/log/softfail.log. You can check it
+to see softfail in action. The logs are formatted this way:
+
+softfail: REMOTEMF -> REMOTERCPT (TCPREMOTEIP) <Additional Information>
+
+<Additional Information> is usually similar to:
+
+ - Doesn't Exists Block (6m)
+ - Exists Block id = 18
+ - Exists Accept id = 16
+ - Exists Block id = 13  (RFC note: seen IP again (0/10) too early)
+ - Exists Block id = 2367697 (RFC note: seen too early for (10/10) times: Blacklisted)
+
+They give you all necessary information regarding Soft Fail's decisions as
+described in (2).
+
+6. Maintainance programs
+
+You will also have installed the following maintainance programs:
+		
+- /usr/local/bin/rotate-softfail-db
+
+It is a C program that, without arguments (this is how it is run from crontab)
+will delete all auto blacklisted entries from your database (the ones
+blacklisted automatically) that are older than MAXDAYSAUTOBLACKINDB days.
+
+If used with the -b option, this program will delete all AUTO *blacklisted*
+entries from your database, doesn't matter how long they exist.
+
+If used with -f option, this program will delete all AUTO entries from
+softfail's database, doesn't matter how long they exist or if they are
+black, grey or whitelisted.
+
+MANUAL database entries should only be handled by yourself in the SQL db.
+
+- /usr/local/bin/rotate-softfail.sh
+
+This is a simple shell scripts which sends some softfail's statistics from
+e-mail. You are STRONGLY SUGGESTED to change MAILREPORT address in this file.
+
+7. Good Luck!
+
+Good Luck with Soft Fail, an enhaced greylisting system for Qmail used and
+approved by a number of FreeBSD Brasil LTDA's customers.
+

@@ -1,0 +1,398 @@
+[prev in list] [next in list] [prev in thread] [next in thread] 
+
+List:       freebsd-ipfw
+Subject:    Re: I have four ideia for IPFW2
+From:       Patrick Tracanelli <eksffa () freebsdbrasil ! com ! br>
+Date:       2003-07-14 21:35:51
+[Download RAW message or body]
+
+> >The logs with more information, as ( tcpflags (syn,ack,fin,rst...),
+ipoptions, iplen, iptos, ipttl...)
+   > >This could more be called by one keyword (ex: logfull) in the IPFW.
+   > >Sample:
+   > >ipfw add deny logfull ...
+   > >
+   > >Or an sysctl variable :-)
+   >
+   >
+   > I have ancient patches on my FreeBSD homepage for that. Maybe someday
+   > I'll update them or even commit them.
+
+Extended logging was really a desired feature Diego Linke and me used to
+talk about; CJC's patches couldnt apply on recent -current but reading
+it motivated and inspired us doing some changes.
+
+The following patches add an "extended" keyword to ipfw2 logging
+statements; more detailed logging seemed to be more interesting for some
+rules than for others, so just enabling or not, via sysctl sounded too
+mandatory. A good idea was to allow usual logging or detailed ones to be
+a per-rule definition;
+
+Expected syntax adds "extended" keyword between log and logamount, say,
+"... log extended logamount 2000 tcp from...", where extended stated
+rules like:
+
+00400   39   1911 allow log extended logamount 800 tcp from me to
+200.210.70.0/24 out xmit wi0 setup // extended log ging to wired network
+keep-state
+
+00450  368 199919 allow log extended ip from { not me or
+200.230.121.0/24 or 200.210.42.0/24 } to me in recv wi0 //lets analise
+incoming trash from wireless to me
+00470    0      0 allow log extended logamount 20000 ip from any to any
+via ath0 // ext. log. experiental multimode unwired net
+00500 1000 120379 allow ip from any to any
+65535    0      0 deny ip from any to any
+
+    Will produce logging as:
+
+Jul 14 17:55:36 redfield-claire kernel: ipfw: 450 Accept UDP
+128.32.136.12:53 200.210.42.5:49476 in via wi0 (ttl 50, id 59167, len 189)
+
+Jul 14 17:55:36 redfield-claire kernel: ipfw: 400 Accept TCP
+200.210.42.5:49578 200.210.70.4:25 out via wi0 [iptos lowdelay (0x10)] 
+[ipoptions lsrr,rr (0x05) ttl 64, id 0, len 60]
+[tcpflags syn (0x02) tcpoptions window,windowts,window,windowtstimestamp 
+(0x0a)] ack number 0 seq number 1506862975
+
+Jul 14 17:55:36 redfield-claire kernel: ipfw: 400 Accept TCP
+200.210.70.4:25 200.210.42.5:49578 in via wi0 [iptos  (0x00)] [ipoptions 
+lsrr,rr (0x05) ttl 63, id 47927, len 44] [tcpflags syn,ack (0x12) 
+tcpoptions window,windowsack (0x06)] ack number 1523640191 seq number 
+3568599789
+
+-- 
+Atenciosamente,
+
+Patrick Tracanelli
+patrick @ freebsdbrasil.com.br
+"Long live Hanin Elias, Kim Deal!"
+
+["ipfw2.c.patch" (text/plain)]
+
+--- /usr/src/sbin/ipfw/ipfw2.c	Mon Jul 14 15:57:41 2003
++++ /usr/local/freebsdbrasil/cvs_root//usr/src/sbin/ipfw/ipfw2.c	Mon Jul 14 17:08:48 \
+2003 @@ -15,11 +15,11 @@
+  *
+  * This software is provided ``AS IS'' without any warranties of any kind.
+  *
+  * NEW command line interface for IP firewall facility
+  *
+- * $FreeBSD: /repoman/r/ncvs/src/sbin/ipfw/ipfw2.c,v 1.35 2003/07/14 18:57:41 luigi \
+Exp $ + * $FreeBSD: /usr/local/www/cvsroot/FreeBSD/src/sbin/ipfw/ipfw2.c,v 1.35 \
+                2003/07/14 18:57:41 luigi Exp $
+  */
+ 
+ #include <sys/param.h>
+ #include <sys/mbuf.h>
+ #include <sys/socket.h>
+@@ -1012,17 +1012,19 @@
+ 		default:
+ 			printf("** unrecognized action %d len %d",
+ 				cmd->opcode, cmd->len);
+ 		}
+ 	}
+-	if (logptr) {
+-		if (logptr->max_log > 0)
+-			printf(" log logamount %d", logptr->max_log);
+-		else
+-			printf(" log");
+-	}
+ 
++	/* Extended logging */
++        if (logptr) {
++                if (logptr->max_log > 0)
++                        printf(" log%s logamount %d", logptr->extended == 1 ? " \
+extended" : " ", logptr->max_log); +                else
++                        printf(" log%s",logptr->extended == 1 ? " extended" : "");
++        }
++ 
+ 	/*
+ 	 * then print the body.
+ 	 */
+ 	if (rule->_pad & 1) {	/* empty rules before options */
+ 		if (!do_compact)
+@@ -2880,11 +2882,11 @@
+ 		errx(EX_DATAERR, "invalid action %s\n", av[-1]);
+ 	}
+ 	action = next_cmd(action);
+ 
+ 	/*
+-	 * [log [logamount N]]	-- log, optional
++	 * [log [extended] [logamount N]]	-- log, optional
+ 	 *
+ 	 * If exists, it goes first in the cmdbuf, but then it is
+ 	 * skipped in the copy section to the end of the buffer.
+ 	 */
+ 	if (ac && !strncmp(*av, "log", strlen(*av))) {
+@@ -2892,10 +2894,19 @@
+ 		int l;
+ 
+ 		cmd->len = F_INSN_SIZE(ipfw_insn_log);
+ 		cmd->opcode = O_LOG;
+ 		av++; ac--;
++
++		/* Extended logging */
++                if (ac && !strncmp(*av, "extended", strlen(*av))) {
++                        c->extended = 1;
++                        ac--; av++;
++                }
++
++
++
+ 		if (ac && !strncmp(*av, "logamount", strlen(*av))) {
+ 			ac--; av++;
+ 			NEED1("logamount requires argument");
+ 			l = atoi(*av);
+ 			if (l < 0)
+
+
+["ip_fw.h.patch" (text/plain)]
+
+--- /usr/src/sys/netinet/ip_fw.h	Fri Jul 11 07:02:08 2003
++++ /usr/local/freebsdbrasil/cvs_root/usr/src/sys/netinet/ip_fw.h	Mon Jul 14 16:56:43 2003
+@@ -261,11 +261,11 @@
+  */
+ typedef struct  _ipfw_insn_log {
+         ipfw_insn o;
+ 	u_int32_t max_log;	/* how many do we log -- 0 = all */
+ 	u_int32_t log_left;	/* how many left to log 	*/
++	u_int32_t extended;	/* Extended logging */
+ } ipfw_insn_log;
+ 
+ /*
+  * Here we have the structure representing an ipfw rule.
+  *
+
+
+["ip_fw2.c.patch" (text/plain)]
+
+--- /usr/src/sys/netinet/ip_fw2.c	Sat Jul 12 02:54:17 2003
++++ /usr/local/freebsdbrasil/cvs_root/usr/src/sys/netinet/ip_fw2.c	Mon Jul 14 \
+16:55:45 2003 @@ -20,15 +20,21 @@
+  * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+  * SUCH DAMAGE.
+  *
+- * $FreeBSD: /repoman/r/ncvs/src/sys/netinet/ip_fw2.c,v 1.36 2003/07/12 05:54:17 \
+luigi Exp $ + * $FreeBSD: /usr/local/www/cvsroot/FreeBSD/src/sys/netinet/ip_fw2.c,v \
+                1.36 2003/07/12 05:54:17 luigi Exp $
+  */
+ 
+-#define        DEB(x)
+-#define        DDB(x) x
++#define	DEB(x)
++#define	DDB(x) x
++
++/* Extended logging */
++#define	GFLAGS_LEN	35
++#define	GIOPTS_LEN	28
++#define	GITOS_LEN	28
++#define	GTOPTS_LEN	55
+ 
+ /*
+  * Implement IP packet firewall (new version)
+  */
+ 
+@@ -111,10 +117,61 @@
+ MALLOC_DEFINE(M_IPFW, "IpFw/IpAcct", "IpFw/IpAcct chain's");
+ 
+ static int fw_debug = 1;
+ static int autoinc_step = 100; /* bounded to 1..1000 in add_rule() */
+ 
++/* Extended logging */
++
++struct _s_x {
++        char *s;
++        int x;
++};
++
++static struct _s_x f_tcpflags[] = {
++        { "syn", TH_SYN },
++        { "fin", TH_FIN },  
++        { "ack", TH_ACK },
++        { "psh", TH_PUSH },
++        { "rst", TH_RST },
++        { "urg", TH_URG },
++        { "tcp flag", 0 },
++        { NULL, 0 }
++};
++
++ static struct _s_x f_ipopts[] = {
++        { "ssrr",       IP_FW_IPOPT_SSRR},
++        { "lsrr",       IP_FW_IPOPT_LSRR},
++        { "rr",         IP_FW_IPOPT_RR},
++        { "ts",         IP_FW_IPOPT_TS},
++        { "ip option",  0 },
++        { NULL, 0 }
++}; 
++
++static struct _s_x f_iptos[] = {
++        { "lowdelay",   IPTOS_LOWDELAY},
++        { "throughput", IPTOS_THROUGHPUT},
++        { "reliability", IPTOS_RELIABILITY},
++        { "mincost",    IPTOS_MINCOST},
++        { "congestion", IPTOS_CE},
++        { "ecntransport", IPTOS_ECT},
++        { "ip tos option", 0},
++        { NULL, 0 }
++};
++
++static struct _s_x f_tcpopts[] = {
++        { "mss",        IP_FW_TCPOPT_MSS },
++        { "maxseg",     IP_FW_TCPOPT_MSS },
++        { "window",     IP_FW_TCPOPT_WINDOW },
++        { "sack",       IP_FW_TCPOPT_SACK },
++        { "ts",         IP_FW_TCPOPT_TS },
++        { "timestamp",  IP_FW_TCPOPT_TS },
++        { "cc",         IP_FW_TCPOPT_CC },
++        { "tcp option", 0 },
++        { NULL, 0 }
++};
++
++
+ #ifdef SYSCTL_NODE
+ SYSCTL_NODE(_net_inet_ip, OID_AUTO, fw, CTLFLAG_RW, 0, "Firewall");
+ SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, enable,
+     CTLFLAG_RW | CTLFLAG_SECURE3,
+     &fw_enable, 0, "Enable ipfw");
+@@ -455,17 +512,18 @@
+ 
+ /*
+  * We enter here when we have a rule with O_LOG.
+  * XXX this function alone takes about 2Kbytes of code!
+  */
++
+ static void
+ ipfw_log(struct ip_fw *f, u_int hlen, struct ether_header *eh,
+ 	struct mbuf *m, struct ifnet *oif)
+ {
+ 	char *action;
+-	int limit_reached = 0;
+-	char action2[40], proto[48], fragment[28];
++	int limit_reached = 0, extended = 0;
++	char action2[40], proto[48], fragment[28], ipvals[200];
+ 
+ 	fragment[0] = '\0';
+ 	proto[0] = '\0';
+ 
+ 	if (f == NULL) {	/* bogus pkt */
+@@ -486,10 +544,13 @@
+ 			limit_reached = l->max_log;
+ 		cmd += F_LEN(cmd);	/* point to first action */
+ 		if (cmd->opcode == O_PROB)
+ 			cmd += F_LEN(cmd);
+ 
++		/* Extended logging rule */
++		extended = l->extended;
++ 
+ 		action = action2;
+ 		switch (cmd->opcode) {
+ 		case O_DENY:
+ 			action = "Deny";
+ 			break;
+@@ -571,11 +632,11 @@
+ 		switch (ip->ip_p) {
+ 		case IPPROTO_TCP:
+ 			len = snprintf(SNPARGS(proto, 0), "TCP %s",
+ 			    inet_ntoa(ip->ip_src));
+ 			if (offset == 0)
+-				snprintf(SNPARGS(proto, len), ":%d %s:%d",
++				len += snprintf(SNPARGS(proto, len), ":%d %s:%d",
+ 				    ntohs(tcp->th_sport),
+ 				    inet_ntoa(ip->ip_dst),
+ 				    ntohs(tcp->th_dport));
+ 			else
+ 				snprintf(SNPARGS(proto, len), " %s",
+@@ -619,24 +680,78 @@
+ 		if (ip_off & (IP_MF | IP_OFFMASK))
+ 			snprintf(SNPARGS(fragment, 0), " (frag %d:%d@%d%s)",
+ 			     ntohs(ip->ip_id), ip_len - (ip->ip_hl << 2),
+ 			     offset << 3,
+ 			     (ip_off & IP_MF) ? "+" : "");
++
++		if (extended == 1) {
++			int	i;
++			char g_flags[GFLAGS_LEN]="", g_ipopts[GIOPTS_LEN]="", g_iptos[GITOS_LEN]="", \
+g_tcpopts[GTOPTS_LEN]="", comma[1]=""; +
++			u_char set = tcp->th_flags & 0xff;
++			u_char setopt = ip->ip_hl & 0xff;
++			u_char settos = ip->ip_tos & 0xff;
++			u_char settcpopt = tcp->th_off & 0xff;
++	
++			if (ip->ip_p == 6) { 
++				for (i=0; f_tcpflags[i].x != 0; i++) 
++				{
++					if (set & f_tcpflags[i].x) 
++					{
++						snprintf(g_flags, GFLAGS_LEN-1, "%s%s%s", g_flags, comma, f_tcpflags[i].s);
++						comma[0] = ',';
++					} 
++				}
++				comma[0] = NULL; /* reset comma */
++				for (i=0; f_ipopts[i].x != 0; i++)
++				{
++					if (setopt & f_ipopts[i].x)
++					{
++						snprintf(g_ipopts, GIOPTS_LEN-1, "%s%s%s", g_ipopts, comma, f_ipopts[i].s);
++						comma[0] = ',';
++					}
++				}
++				comma[0] = NULL; /* once again */
++				for (i=0; f_iptos[i].x != 0; i++)
++				{
++					if (settos & f_iptos[i].x)
++					{
++						snprintf(g_iptos, GITOS_LEN-1, "%s%s%s", g_iptos, comma, f_iptos[i].s);
++						comma[0] = ',';
++					}
++				}
++				comma[0] = NULL;
++				for (i=0; f_tcpopts[i].x != 0; i++)
++				{
++					if (settcpopt & f_tcpopts[i].x)
++					{
++						snprintf(g_tcpopts, GTOPTS_LEN-1, "%s%s%s", g_tcpopts, comma, f_tcpopts[i].s);
++						comma[0] = ',';
++					}
++				}
++				snprintf(SNPARGS(ipvals, 0), " [iptos %s (0x%02x)] [ipoptions %s (0x%02x) ttl \
+%u, id %u, len %u] [tcpflags %s (0x%02x) tcpoptions %s (0x%02x)] ack number %u seq \
+number %u", +					g_iptos, ip->ip_tos, g_ipopts, ip->ip_hl, ip->ip_ttl, \
+ntohs(ip->ip_id), ip_len, +						g_flags, tcp->th_flags, g_tcpopts, tcp->th_off, \
+tcp->th_ack, tcp->th_seq); +			} else {
++				snprintf(SNPARGS(ipvals, 0), " (ttl %u, id %u, len %u)", ip->ip_ttl, \
+ntohs(ip->ip_id), ip_len); +			}
++		} else
++			ipvals[0] = '\0';
+ 	}
+ 	if (oif || m->m_pkthdr.rcvif)
+ 		log(LOG_SECURITY | LOG_INFO,
+-		    "ipfw: %d %s %s %s via %s%d%s\n",
++		    "ipfw: %d %s %s %s via %s%d%s%s\n",
+ 		    f ? f->rulenum : -1,
+ 		    action, proto, oif ? "out" : "in",
+ 		    oif ? oif->if_name : m->m_pkthdr.rcvif->if_name,
+ 		    oif ? oif->if_unit : m->m_pkthdr.rcvif->if_unit,
+-		    fragment);
++		    fragment, ipvals);
+ 	else
+ 		log(LOG_SECURITY | LOG_INFO,
+-		    "ipfw: %d %s %s [no if info]%s\n",
++		    "ipfw: %d %s %s [no if info]%s%s\n",
+ 		    f ? f->rulenum : -1,
+-		    action, proto, fragment);
++		    action, proto, fragment, ipvals);
+ 	if (limit_reached)
+ 		log(LOG_SECURITY | LOG_NOTICE,
+ 		    "ipfw: limit %d reached on entry %d\n",
+ 		    limit_reached, f ? f->rulenum : -1);
+ }
+
+
+
+_______________________________________________
+freebsd-ipfw@freebsd.org mailing list
+http://lists.freebsd.org/mailman/listinfo/freebsd-ipfw
+To unsubscribe, send any mail to "freebsd-ipfw-unsubscribe@freebsd.org"

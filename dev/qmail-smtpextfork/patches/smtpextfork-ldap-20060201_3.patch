@@ -1,0 +1,264 @@
+--- qmail-smtpd.c.bfore-xf	Mon Mar 02 12:40:32 2009
++++ qmail-smtpd.c	Sat May 26 22:04:39 2007
+@@ -42,9 +42,12 @@
+ /* zlib needs to be after openssl includes or build will fail */
+ #include <zlib.h>
+ #endif
++#include "wait.h" // QMAIL SMTPEXTFORK required
+ 
+ #define MAXHOPS 100
+ #define MAXLINELEN 10000
++#define XFENVLEN 2048
++//#define XF_QUITASAP
+ unsigned long databytes = 0;
+ int timeout = 1200;
+ 
+@@ -238,6 +241,108 @@
+   _exit(0);
+ }
+ 
++// QMAIL SMTPEXTFORK patch start block
++void err_smtpxf450() {
++     out("450 ");
++  if (env_get("450SMTPEXTFORK"))
++     out(env_get("450SMTPEXTFORK"));
++  else
++     out("sorry, temporary mailbox failure imposed by local policy");
++  out(" (#4.3.0)\r\n"); flush(); 
++#ifdef XF_QUITASAP
++  sleep(2); _exit(1);
++#endif
++}
++void err_smtpxf421() {           
++     out("421 ");
++  if (env_get("421SMTPEXTFORK"))
++     out(env_get("421SMTPEXTFORK"));
++  else
++     out("sorry, service not available due to local policy");
++  out(" (#4.3.0)\r\n"); flush();
++#ifdef XF_QUITASAP
++  sleep(2); _exit(1);
++#endif
++}
++void err_smtpxf451() {           
++     out("451 ");
++  if (env_get("451SMTPEXTFORK"))
++     out(env_get("451SMTPEXTFORK"));
++  else
++     out("sorry, service not available due to local policy");
++  out(" (#4.3.0)\r\n"); flush();
++#ifdef XF_QUITASAP
++  sleep(2); _exit(1);
++#endif
++}
++void err_smtpxf454() {
++     out("454 ");
++  if (env_get("454SMTPEXTFORK"))
++     out(env_get("454SMTPEXTFORK"));
++  else
++     out("sorry, temporary envelope failure due to local policy");
++  out(" (#5.7.1)\r\n"); flush();
++#ifdef XF_QUITASAP
++  sleep(2); _exit(1);
++#endif
++}
++void err_smtpxf501() {           
++     out("501 ");
++  if (env_get("501SMTPEXTFORK"))
++     out(env_get("501SMTPEXTFORK"));
++  else
++     out("syntax error");
++  out(" (#5.7.1)\r\n"); flush();
++#ifdef XF_QUITASAP
++  sleep(2); _exit(1);
++#endif
++}
++void err_smtpxf503() {
++     out("503 ");
++  if (env_get("503SMTPEXTFORK"))
++     out(env_get("503SMTPEXTFORK"));
++  else
++     out("sorry, wrong usage of SMTP commands");
++  out(" (#5.7.1)\r\n"); flush();
++#ifdef XF_QUITASAP
++  sleep(2); _exit(1);
++#endif
++}
++void err_smtpxf550() {
++     out("550 ");
++  if (env_get("550SMTPEXTFORK"))
++     out(env_get("550SMTPEXTFORK"));
++  else
++     out("sorry, permanent failure imposed by local policy");
++  out(" (#5.7.1)\r\n"); flush();
++#ifdef XF_QUITASAP
++  sleep(2); _exit(1);
++#endif
++}
++void err_smtpxf553() {
++     out("552 ");
++  if (env_get("552SMTPEXTFORK"))
++     out(env_get("553SMTPEXTFORK"));
++  else
++     out("sorry, permanent mailbox failure due to local policy");
++  out(" (#5.7.1)\r\n"); flush();
++#ifdef XF_QUITASAP
++  sleep(2); _exit(1);
++#endif
++}
++void err_smtpxf554() {
++     out("554 ");
++  if (env_get("554SMTPEXTFORK"))
++     out(env_get("554SMTPEXTFORK"));
++  else
++     out("sorry, permanent envelope failure due to local policy"); 
++  out(" (#5.7.1)\r\n"); flush();
++#ifdef XF_QUITASAP
++  sleep(2); _exit(1);
++#endif
++}
++// QMAIL SMTPEXTFORK patch end block
++
+ const char *remotehost;
+ const char *remoteinfo;
+ const char *local;
+@@ -831,6 +936,129 @@
+   return 0;
+ }
+ 
++// QMAIL SMTPEXTFORK patch start block
++int xf_extfork()
++{
++  logline(3,"XF: starting xf_extfork");
++  int i, child, wstat;
++  char *sep = ",";
++  char *prog;
++  char *brkt;
++  char var_ambiente[2048];
++  char *rop[2];
++
++  if (!env_unset("REMOTEMF")) die_read();
++  if (!env_unset("REMOTERCPT")) die_read();
++  if (!env_unset("REMOTEHELO")) die_read();
++  if (!env_put2("REMOTEMF",mailfrom.s)) die_nomem();
++  if (!env_put2("REMOTERCPT",addr.s)) die_nomem();
++  if (!env_put2("REMOTEHELO",helohost.s)) die_nomem();
++
++  rop[1] = 0;
++
++  if ( strlen(env_get("SMTPEXTFORK")) > XFENVLEN -1 ||  strlen(env_get("SMTPEXTFORK")) > XFENVLEN -1 )
++  {
++    logline2(1,"XF: SMTPEXTFORK(R) enviroment variable is too long (over 2k): ",remoteip);
++    return;
++  }
++
++  // split horizon our own
++  if (!relayclient)
++  {
++  logline2(3,"XF: host is not RELAYCLIENT: ",remoteip);
++    if (!(brkt=env_get("SMTPEXTFORK")))
++    {
++      logline2(1,"XF: SMTPEXTFORK enviroment variable is not defined: ",remoteip);
++      return 1;
++    }
++    else
++      strncpy(var_ambiente,brkt,XFENVLEN -1);
++  }
++  else
++  {
++    if (!(brkt=env_get("SMTPEXTFORKR")))
++    {
++      return 1;
++    }
++    else
++      strncpy(var_ambiente,brkt,XFENVLEN -1);
++  }
++  // end split horizon
++
++  for (prog=strtok(var_ambiente, sep); prog ; prog=strtok(0, sep)) {
++
++  logline2(3,"XF: entering xf_extfork()'s for() loop for fork()ing ",prog);
++
++       switch(child = vfork()) {
++         case -1:
++           return 1;
++         case 0:
++           rop[0] = prog;
++           execv(rop[0], rop);
++	   logline2(3,"XF: forking failed for ",prog);
++           _exit(111); // returns 111 if fork fails
++       }
++
++       wait_pid(&wstat,child);
++      
++       if (wait_crashed(wstat)) {
++	  logline2(1,"XF (#5c): ",prog);
++          return 1;
++       }
++
++       switch(wait_exitcode(wstat)) {
++          case 101:
++	    logline2(1,"XF (101): ",prog);
++            err_smtpxf454(); seenmail=0; return;
++          break;
++          case 103:
++	    logline2(1,"XF (103): ",prog);
++            err_smtpxf451(); seenmail=0; return;
++          break;
++           case 105:
++	     logline2(1,"XF (105): ",prog);
++             err_smtpxf421(); seenmail=0; return;
++           break;
++           case 107:
++	     logline2(1,"XF (107): ",prog);
++             err_smtpxf450(); seenmail=0; return;
++           break;
++          case 100:
++	    logline2(1,"XF (100): ",prog);
++            err_smtpxf554(); seenmail=0; return;
++          break;
++           case 102:
++	     logline2(1,"XF (102): ",prog);
++             err_smtpxf550(); seenmail=0; return;
++           break;
++           case 104:
++	     logline2(1,"XF (104): ",prog);
++             err_smtpxf553(); seenmail=0; return;
++           break;
++           case 106:
++	     logline2(1,"XF (106): ",prog);
++             err_smtpxf503(); seenmail=0; return;
++           break;
++           case 108:
++	     logline2(1,"XF (108): ",prog);
++             err_smtpxf501(); seenmail=0; return;
++           break;
++          case 111:
++	     logline2(1,"XF warn: cannot fork external program: ",prog);
++          break;
++          case 0:
++	     logline2(1,"XF (0): ",prog);
++          break;
++          default:
++	     logline2(1,"XF (#5d): ",prog);
++          break;
++       }
++  }
++       return 1; /* if there is no more external program to fork
++                       and no err_smtpxfXXX was issued, we should return 1 */
++}
++// QMAIL SMTPEXTFORK patch end block
++
+ 
+ void smtp_helo(char *arg)
+ {
+@@ -1191,6 +1428,9 @@
+     logline(3,"tarpitting");
+     while (sleep(tarpitdelay));
+   }
++  if (env_get("SMTPEXTFORK") || env_get("SMTPEXTFORKR")) {
++       if (!xf_extfork()) return;
++  }
+   out("250 ok\r\n");
+ }
+

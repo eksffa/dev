@@ -1,0 +1,190 @@
+
+SMTP EXTERNAL PROGS FORKER PATCH FOR QMAIL-SMTPD
+
+This patch allows you to set a list of programs which will be forked from
+qmail-smtpd. For every forked program, qmail-smtpd expects to get appropriated
+return codes. Depending on the return code, qmail-smtpd will issue a temporary
+failure or a permanent failure. The list of return codes and may change how
+qmail-smtpd will end up the SMTP session (4XX or 5XX code) can be found in
+the diagram[1] on how SMTPEXTFORK patch works.
+
+If the program returns 0 or an unexpected code, qmail-smtpd continues
+processing. If more than one program is listed (it is allowed, comma
+separed list) the next program will be forked, and so on. Only when all forked
+programs return 0 qmail-smtpd will continue as usual.
+
+SMTPEXTFORK patch is split-horizon-aware. You can define a list of external
+programs to be forked on the SMTPEXTFORK enviroment variable. An example
+definition using tcprules(1) would be:
+
+:allow,SMTPEXTFORK="/var/qmail/bin/prog0,/some/other/prog1,/some/other/prog2"
+
+Using env-dir, it could be:
+
+	echo "/var/qmail/bin/prog0,/some/other/prog1,/some/other/prog2" \
+		> /var/service/smtpd/env/SMTPEXTFORK
+
+Those programs will be forked *only* when the SMTP session is started for a
+non-relay client (delivery mode). This way the external programs can perform
+the number of checks they wish before returning an return code which will
+make qmail-smtpd allow, deny with a temporary (4XX) code or deny with a
+permanent (5XX) code, according to the diagram[1].
+
+If you have special checks to be done *only* for relay-clients, it is enough
+to list the program(s) from an enviroment variable called SMTPEXTFORKR. It
+works exactly the same way, but only for sessions when the remote host is a
+RELAYCLIENT:
+
+:allow,SMTPEXTFORK="/path/to/prog0,/some/other/prog1"
+
+Using env-dir, it could be:
+
+        echo "/path/to/prog0,/some/other/prog1" \
+                > /var/service/smtpd/env/SMTPEXTFORKR
+
+If SMTPEXTFORK is compiled with XF_QUITASAP defined, it assumes a QUITASAP
+behavior. It means once the external program returns code for a temporary or
+permanent failure, it will issue the apropriated SMTP error code and quit the
+session immediately. It may break some RFC recomendations in this case.
+That is why XF_QUITASAP behavior is disabled by default.
+
+For each SMTP code issued on a permanent or temporary failure, one can issue
+their own customized messages. To do so, you need to set the XXXSMTPEXTFORK
+enviroment variable. XXX can be any 5XX or 4XX code used by this patch.
+
+It is importand to look at the diagram[1] to understand the possible codes.
+
+I.e., if a certain external program returns 100, qmail-smtpd with SMTPEXTFORK
+patch will end the SMTP session with a 554 SMTP code. The message is 
+
+	554 sorry, permanent envelope failure due to local policy
+
+Usually it is the same message (or similar) for all 5XX failures and it says
+"temporary" instead of "permanent" for 4XX failures. If your program does
+something special and you would like to change de message, you should for
+this example create the 554SMTPEXTFORK enviroment, containing your message:
+
+:allow,SMTPEXTFORK="/path/to/prog0",554SMTPEXTFORK="your message"
+
+Or
+
+echo "your message" > /var/service/smtpd/env/554SMTPEXTFORK
+
+It is relevant to notice that this patch will be started right after all
+envelope commands. Meaning, in an SMTP session, it will be started after
+HELO/EHLO, MAIL FROM and RCPT TO commands.
+
+The external forked program will be able to work with all enviroment vars
+that qmail-smtpd itself knows. This is how Unix works, child processes 
+always get their parent's enviroment if it is not clared before forking.
+It is very good to write the programs which will be forked from SMTPEXTFORK
+to be aware of this. If you write programs, you will also like to know that
+this patch sets 3 more enviroment vars, REMOTEMF, REMOTEHELO and REMOTERCPT,
+the first with the issued remote mail from, the later with the issued remote
+ehlo/ehlo and the last one with the last (actual) remote rcpt to.
+
+Also note that, if you have this patch compiled but don't have SMTPEXTFORK
+or SMTPEXTFORKR enviroment set, this patch will do nothing, won't even be
+called/started, just like would happen if you did not have this patch applied
+at all. If you have SMTPEXTFORK env empty, the same will happen. If you have
+SMTPEXTFORK env configured but no SMTPEXTFORKR, when a SMTP session for a
+RELAYCLIENT start one logging line will be added to your qmail-smtpd logs
+mantioning SMTPEXTFORKR is not set. This is not a warning nor an error, 
+just information.
+
+EXAMPLE PROGRAM
+
+To understand this patch's possibility of use, look at this simple and very
+clear example code, let's call it john-joe-checker.c:
+
+#include <stdio.h>
+#include <stdlib.h>
+
+main(){
+
+char *a;
+char mailfrom[254];
+char recipient[254];
+
+if (!(a=getenv("REMOTEMF"))) {
+        fprintf(stderr,"No REMOTEMF var");
+        exit(0);
+} else
+        strcpy(mailfrom,a);
+
+if (!(a=getenv("REMOTERCPT"))) {
+        fprintf(stderr,"No REMOTERCPT var");
+        exit(0);
+} else
+        strcpy(recipient,a);
+
+if ((strcmp(mailfrom, "john@foodomain.net") == 0)&&
+   (strcmp(recipient, "joe@joedomain.net") == 0))
+        return 101;
+
+exit(0);
+}
+
+This program only compares REMOTEMF enviroment to "john@foodomain.net" and
+REMOTERCPT to "joe@joedomain.net". If both match, meaning john@foodomain.net
+is sending a message to joe@joedomain.net (or a number of other recipients and
+joe@joedomain.net is one of them), john-joe-checker program will return 101,
+which will make qmail-smtpd issue a 454 code temporary failure.
+
+To use this program, you can:
+
+cc -o john-joe-checker.c /usr/local/bin/john-joe-checker
+
+and later, define the SMTPEXTFORK env, for example via env-dir:
+
+echo "/usr/local/bin/john-joe-checker" > /var/service/smtpd/env/SMTPEXTFORK
+
+Now, to set up your own failure message on the SMTP session, just:
+
+echo "sorry john, you can not send a message to joe right now - temporary failure" \
+	> /var/service/smtpd/env/454SMTPEXTFORK
+
+Restart qmail-smtpd, so it can re-read the enviroment - for example, if you
+use daemontools: svc -k /var/service/smtpd (or restart it your own way).
+
+Note: if you define SMTPEXTFORKR exactly as mentioned for SMTPEXTFORK, this
+check will only be made when the SMTP session is started for a RELAYCLIENT,
+so as a desired effect, will only make sense if "john@foodomain.net" is a
+local user.
+
+Yeah, it is a very simple and useless program, but enough to get the idea
+on how to use this patch's features. You can also create scripts
+(sh, python, ..) instead of C programs, but you are strongly advised to work
+only with C programs.
+
+You can search for "softfail", "vchkuser" and also "xf-spf" among others, to
+see real-life programs which depend on this patch, most written by
+FreeBSD Brasil people.
+
+AVAILABILITY OF THIS PATCH
+
+This patch is available for the most recent versions of qmail with SPAMCONTROL
+patches and for the most recent version of qmail-ldap. It is not designed to
+be used on vanilla qmail. From the FreeBSD Ports Collection you can
+automagically install this patch, just selecting it from the ports' dialog
+(or via make config).
+
+LOGGING
+
+This patch heavily uses Dr. Erwin's logging functions under qmail-spamcontrol
+and heavily uses Mr Opperman's logging functions under qmail-ldap.
+
+THE DIAGRAM
+
+Can be found at:
+
+[1] http://www6.freebsdbrasil.com.br/~eksffa/l/dev/qmail-smtpextfork/diagrams/smtpextfork-diagrama.png
+
+Good Luck with SMTPEXTFORK patch, an enhaced greylisting system for Qmail used and  
+approved by a number of FreeBSD Brasil LTDA's customers ;-)
+
+If you make improvements to this patch, let me know please:
+
+		patrick@freebsdbrasil.com.br
+
+

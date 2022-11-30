@@ -1,0 +1,88 @@
+
+1. INSTALL INSTRUCTIONS
+
+To install this program you can use FreeBSD Ports Collection or untar it
+and just make && make install:
+
+	tar vxjf vchkuser-x.x.tar.bz2
+	cd vchkuser/
+	make
+	make install
+	make clean
+
+It will install vchkuser on ~vpopmail/bin/ with 4711 modes, owned by vpopmail
+user and vchkpw group. It allows any unprivileged process like qmail-smtpd, to
+run this program with appropriated privileges.
+
+If you feel very concerned about suid bit programs executable by world, do
+
+	make install-qnofiles
+
+In replacement to
+
+	make install
+
+Like this:
+
+	tar vxjf vchkuser-x.x.tar.bz2
+	cd vchkuser/
+	make
+	make install-qnofiles
+	make clean
+
+It will install vchkuser on ~vpopmail/bin/ with 4710 modes, owned by vpopmail
+user and qnofiles group, which will restrict this program's execution to users
+on qnofiles group, by default only some qmail system users (alias, qmaild,
+qmaill and qmailp) including qmaild who runs qmail-smtpd.
+
+2. HOW IT WORKS
+
+vchkuser retrieves REMOTERCPT enviroment variable (usually defined from 
+SMTPEXTFORK' patch), checks the configured behavior of vdelivermail looking
+for .qmail-default in the domain's VHOME or additional .qamil-<ext> files,
+checks if (1) domain exists, (2) user exists or (3) alias exists. If alias
+do not exist and (1) or (2) do not exist, returns BOUNCE code, if (3) or
+(1) and (2) exists, returns NOTBOUNCE code. BOUNCE and NOTBOUNCE are defined
+in vchkuser.h.
+
+If domain's behavior is not 'bounce-no-mailbox' vchkuser assumes special 
+behavior configured by sysadmin and bypasses its verification, returning
+NOTBOUNCE code.
+
+If anything unexpected happens, vchkuser returns FAIL code.
+
+This version of vchkuser is expected to be used with qmail-smtpd's SMTPEXTFORK
+patch, which will fork this program and take a decision upon the return code
+of vchkuser. It means vchkuser is expected to be run as a child proccess of
+qmail-smtpd.
+
+3. USAGE INSTRUCTIONS
+
+Once installed, be sure qmail-smtpd.c's SMTPEXTFORK patch was applied in
+your running version of qmail-smtpd.
+
+Add /usr/local/vpopmail/bin/vchkuser to the appropriated enviroment variable:
+
+	echo /usr/local/vpopmail/bin/vchkuser > /var/service/smtpd/env/SMTPEXTFORK
+
+Or use it with tcprules:
+
+	:allow,SMTPEXTFORK="/usr/local/vpopmail/bin/vchkuser"
+
+Remember that more than one program can be used with SMTPEXTFORK patch. If
+you already use any other, add vchkuser separated by comma:
+
+	:allow,SMTPEXTFORK="/usr/local/vpopmail/bin/vchkuser,/some/other/prog"
+
+Or
+
+	echo "/some/other/prog,/usr/local/vpopmail/bin/vchkuser" \
+		> /var/service/smtpd/env/SMTPEXTFORK
+
+Restart qmail-smtpd service with svc -k /var/service/smtpd or your
+own way.
+
+4. GOOD LUCK
+
+   :-)
+
